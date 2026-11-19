@@ -142,6 +142,9 @@ footer { max-width: 1280px; margin: 0 auto; padding: 8px 24px 28px; overflow-wra
 
 /* -- charts ----------------------------------------------------------------- */
 .chart { width: 100%; height: 200px; }
+/* Side by side, the timeline fills the card so it lines up with Top tools. */
+.card-chart { display: flex; flex-direction: column; }
+.card-chart .chart { flex: 1 1 auto; height: auto; min-height: 200px; }
 .chart svg { width: 100%; height: 100%; display: block; }
 .chart .axis { fill: var(--muted); font-size: 10.5px; }
 .chart .grid { stroke: var(--border); stroke-width: 1; }

@@ -468,7 +468,9 @@ class TestSetupHelper(unittest.TestCase):
             "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
         }
         wrapped = wrap_server_config("filesystem", original)
-        self.assertEqual(wrapped["command"], "tutut")
+        # absolute path: Claude Desktop starts servers with a minimal PATH
+        self.assertTrue(Path(wrapped["command"]).is_absolute() or wrapped["command"] == "tutut")
+        self.assertEqual(Path(wrapped["command"]).name, "tutut")
         self.assertIn("--server-name", wrapped["args"])
         self.assertIn("filesystem", wrapped["args"])
         self.assertIn("--", wrapped["args"])
@@ -484,9 +486,13 @@ class TestSetupHelper(unittest.TestCase):
         self.assertEqual(wrapped["env"], original["env"])
 
     def test_is_already_wrapped(self):
-        self.assertTrue(
-            is_already_wrapped({"command": "tutut", "args": ["stdio"]})
-        )
+        # entries written by older versions (bare "tutut") and by the watcher
+        # (absolute path + display options) are both recognised
+        self.assertTrue(is_already_wrapped(
+            {"command": "tutut", "args": ["stdio", "--server-name", "x", "--", "npx"]}))
+        self.assertTrue(is_already_wrapped(
+            {"command": "/home/me/.local/share/tutut/venv/bin/tutut",
+             "args": ["stdio", "--server-name", "x", "--display", ":0", "--", "npx"]}))
         self.assertFalse(is_already_wrapped({"command": "npx", "args": []}))
         self.assertFalse(is_already_wrapped({"command": "python", "args": ["-m", "server"]}))
 
@@ -511,7 +517,7 @@ class TestSetupHelper(unittest.TestCase):
         """Server config with no args should still work."""
         original = {"command": "my-mcp-server"}
         wrapped = wrap_server_config("test", original)
-        self.assertEqual(wrapped["command"], "tutut")
+        self.assertEqual(Path(wrapped["command"]).name, "tutut")
         # Should have: stdio, --server-name, test, --, my-mcp-server
         self.assertIn("my-mcp-server", wrapped["args"])
 
@@ -521,10 +527,21 @@ class TestSetupHelper(unittest.TestCase):
             "args": ["-m", "my_mcp_server", "--port", "3000"],
         }
         wrapped = wrap_server_config("my-python-server", original)
-        self.assertEqual(wrapped["command"], "tutut")
+        self.assertEqual(Path(wrapped["command"]).name, "tutut")
         unwrapped = unwrap_server_config(wrapped)
         self.assertEqual(unwrapped["command"], "python")
         self.assertEqual(unwrapped["args"], ["-m", "my_mcp_server", "--port", "3000"])
+
+    def test_setup_and_watcher_agree(self):
+        """`tutut setup` after `tutut install` must not wrap a server twice."""
+        from tutut import autowrap
+
+        original = {"command": "npx", "args": ["-y", "@some/server"], "cwd": "/srv", "env": {"K": "v"}}
+        by_watcher = autowrap.wrap_entry("s", original, command="/opt/tutut/bin/tutut", gui=[])
+        self.assertTrue(is_already_wrapped(by_watcher))
+        by_setup = wrap_server_config("s", original)
+        self.assertTrue(autowrap.is_wrapped(by_setup))
+        self.assertEqual(unwrap_server_config(by_setup), original)  # every key restored, incl. cwd
 
 
 # =============================================================================

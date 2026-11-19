@@ -116,7 +116,7 @@ tools/call ─▶ Interceptor.decide(msg)    (rules reloaded when config.json ch
 | Stranger calls the public gateway | IP allowlist (Anthropic ranges only) and an unguessable hostname (wildcard cert, so it's not in CT logs) |
 | Spoofed caller IP | Header trusted only from loopback; the gateway listens only on localhost |
 | Credential leakage | Upstream credentials injected locally; config and audit files are 0600; the audit log masks secret-looking values; no access log |
-| Resource exhaustion | 32 MB / 10 MB message limits with error responses; popup queue capped at 10 |
+| Resource exhaustion | 32 MB / 10 MB message limits with error responses; broker queue capped at 50 pending (local fallback queue: 10) |
 | Orphaned processes | SIGTERM handled; child terminated, then killed after 5 s |
 
 **Residual risks.** Another claude.ai user who obtains the gateway URL can add it, because their calls also come from Anthropic's ranges. They could list tools, but each call still needs approval on the owner's screen. OAuth on the gateway would close this. Also, local software that can edit `claude_desktop_config.json` can remove the wrapper, so tutut is an approval layer, not a sandbox.

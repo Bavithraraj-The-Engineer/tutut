@@ -52,39 +52,30 @@ def wrap_server_config(
     """
     Transform an MCP server config entry to route through tutut.
 
-    Original:
+    Uses the same implementation as the background watcher (autowrap), so
+    `tutut setup` and `tutut install` write identical entries: tutut's
+    absolute path (Claude Desktop starts servers with a minimal PATH), the
+    display options the popup needs on Linux, and every other key kept.
+
         {"command": "npx", "args": ["-y", "@some/mcp-server"]}
-
-    Becomes:
-        {"command": "tutut", "args": ["stdio", "--server-name", "my-server",
-         "--", "npx", "-y", "@some/mcp-server"]}
+    becomes
+        {"command": "/home/me/.local/share/tutut/venv/bin/tutut",
+         "args": ["stdio", "--server-name", "my-server", "--display", ":0", …,
+                  "--", "npx", "-y", "@some/mcp-server"]}
     """
-    original_command = original_config.get("command", "")
-    original_args = original_config.get("args", [])
+    from . import autowrap
 
-    # Build the wrapped command
-    guardian_args = [
-        "stdio",
-        "--server-name", server_name,
-        "--",
-        original_command,
-    ] + original_args
-
-    wrapped = {
-        "command": "tutut",
-        "args": guardian_args,
-    }
-
-    # Preserve env vars
-    if "env" in original_config:
-        wrapped["env"] = original_config["env"]
-
-    return wrapped
+    return autowrap.wrap_entry(
+        server_name, original_config,
+        command=autowrap.tutut_executable(), gui=autowrap.gui_args(),
+    )
 
 
 def is_already_wrapped(config: dict[str, Any]) -> bool:
-    """Check if a server config is already wrapped by tutut."""
-    return config.get("command") == "tutut"
+    """Whether an entry already starts through `tutut stdio` (any install path)."""
+    from . import autowrap
+
+    return autowrap.is_wrapped(config)
 
 
 def setup_claude_desktop(
@@ -155,34 +146,13 @@ def setup_claude_desktop(
 
 def unwrap_server_config(config: dict[str, Any]) -> dict[str, Any] | None:
     """
-    Reverse a Guardian-wrapped config back to the original.
+    Reverse a tutut-wrapped entry back to the original (every key kept).
 
-    Returns the original config, or None if not wrapped by Guardian.
+    Returns None if the entry isn't wrapped by tutut.
     """
-    if not is_already_wrapped(config):
-        return None
+    from . import autowrap
 
-    args = config.get("args", [])
-
-    # Find the "--" separator
-    try:
-        sep_idx = args.index("--")
-    except ValueError:
-        return None
-
-    # Extract original command and args
-    original_command = args[sep_idx + 1] if len(args) > sep_idx + 1 else ""
-    original_args = args[sep_idx + 2:]
-
-    result: dict[str, Any] = {
-        "command": original_command,
-        "args": original_args,
-    }
-
-    if "env" in config:
-        result["env"] = config["env"]
-
-    return result
+    return autowrap.unwrap_entry(config)
 
 
 def teardown_claude_desktop(

@@ -12,6 +12,11 @@ Path 3  claude.ai / Desktop / mobile ──▶ Anthropic cloud ──HTTPS──
                      ▲ every path: rules → popup (Allow / Block) → audit log
 ```
 
+<p align="center">
+  <img src="docs/images/popup.png" width="440" alt="tutut approval window: a destructive delete_note call from Claude Desktop through mcp-remote, its arguments, a 39-second auto-block countdown, and two more requests waiting">
+</p>
+<p align="center"><sub>The approval window holding a destructive call. Two requests from other sessions wait in the same queue, each with its own countdown. See also the <a href="#dashboard">dashboard</a>.</sub></p>
+
 ---
 
 ## Features
@@ -358,6 +363,10 @@ tutut dashboard            # opens http://127.0.0.1:8020/?token=… in your brow
 tutut dashboard --port 8030 --no-browser
 ```
 
+![tutut dashboard: totals, calls over time, top tools, breakdown by interception path and by decider, coverage of Claude Desktop servers, and the live feed of decisions](docs/images/dashboard.png)
+
+<sub>Demo data: 400 calls over a week across the three interception paths, decided by the user, by rules and by timeouts.</sub>
+
 A live, read-only web view of everything tutut does, served locally:
 
 - **Live feed** — every intercepted call appears as it is decided (Server-Sent Events), colour-coded allow / block / cancelled, with path (Desktop local, Desktop via mcp-remote, claude.ai gateway), who decided and how long you took; click a row for the full arguments
@@ -504,7 +513,7 @@ pip install -e ".[http]" pytest
 python -m pytest tests/ -v
 ```
 
-**204 tests** (7 of them open real windows and run only with `TUTUT_GUI_TESTS=1`, e.g. `TUTUT_GUI_TESTS=1 xvfb-run -a python -m pytest tests/test_popup.py`). Besides unit tests, several run real processes and servers:
+**205 tests** (7 of them open real windows and run only with `TUTUT_GUI_TESTS=1`, e.g. `TUTUT_GUI_TESTS=1 xvfb-run -a python -m pytest tests/test_popup.py`). Besides unit tests, several run real processes and servers:
 
 | Test | What it proves |
 |------|----------------|
@@ -578,7 +587,7 @@ Verified end to end with two real `tutut stdio` processes receiving tool calls a
 - **Safety:** Block is focused, so Enter blocks; Allow (button or `Y`) only works after 0.7 s; `N`, `Esc` and closing the window block at once.
 - **Countdown:** a bar that turns amber at 10 s and red at 5 s, then auto-blocks.
 
-Preview it with sample requests: `python -m tutut.popup_ui`.
+Preview it with sample requests: `python -m tutut.popup_ui`. A screenshot is at the [top of this README](#tutut).
 
 `PopupManager` serialises popups on a worker thread (max 10 pending, "2 of 4" shown). Results reach asyncio through a callback (no thread parked per call). A request cancelled while queued is skipped; one cancelled while shown closes its own window.
 
@@ -617,7 +626,8 @@ tutut/
 │   ├── service.py        # install / uninstall / status / watch
 │   └── setup_helper.py   # setup / teardown
 ├── examples/demo_server.py   # Demo remote MCP server (notes)
-├── tests/                    # 204 tests (unit + real-process end-to-end + GUI)
+├── docs/images/              # README screenshots (popup, dashboard)
+├── tests/                    # 205 tests (unit + real-process end-to-end + GUI)
 ├── install.sh                # One-command Linux installer
 ├── ARCHITECTURE.md
 └── README.md

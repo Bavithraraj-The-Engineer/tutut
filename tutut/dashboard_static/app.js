@@ -99,7 +99,6 @@
     $("k-wait").textContent = w.count ? fmtMs(w.median) : "–";
     $("k-wait-sub").textContent = w.count ? `median · p95 ${fmtMs(w.p95)} · ${w.count} answered` : "no popups answered";
 
-    renderTimeline(s.timeline, s.window);
     renderBars($("tools"), s.top_tools.map((t) => ({
       label: `${t.server} / ${t.tool}`, total: t.total,
       segments: { allow: t.allow, block: t.block, cancelled: t.cancelled },
@@ -110,6 +109,8 @@
     renderBars($("deciders"), Object.entries(s.decided_by)
       .sort((a, b) => b[1] - a[1])
       .map(([k, v]) => ({ label: BY_LABEL[k] || k, total: v })), "Nothing yet.");
+    // Last: the chart takes its height from the card, which the Top tools list sets.
+    renderTimeline(s.timeline, s.window);
 
     for (const name of Object.keys(s.servers)) state.servers.add(name);
     syncServerOptions();

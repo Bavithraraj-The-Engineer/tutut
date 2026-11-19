@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tutut dashboard</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7' fill='%2389b4fa'/%3E%3C/svg%3E">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"></span>
+      <div>
+        <h1>tutut</h1>
+        <p class="subtitle">MCP tool-call monitor</p>
+      </div>
+    </div>
+    <div class="chips" id="chips" aria-live="polite"></div>
+  </header>
+
+  <main>
+    <section class="toolbar">
+      <div class="segmented" role="tablist" aria-label="Time window" id="windows">
+        <button data-window="1h" role="tab">1 hour</button>
+        <button data-window="24h" role="tab" class="active">24 hours</button>
+        <button data-window="7d" role="tab">7 days</button>
+        <button data-window="all" role="tab">All</button>
+      </div>
+      <span class="muted" id="updated"></span>
+    </section>
+
+    <section class="kpis" id="kpis">
+      <div class="kpi"><span class="kpi-label">Intercepted calls</span><span class="kpi-value" id="k-total">–</span></div>
+      <div class="kpi allow"><span class="kpi-label">Allowed</span><span class="kpi-value" id="k-allow">–</span></div>
+      <div class="kpi block"><span class="kpi-label">Blocked</span><span class="kpi-value" id="k-block">–</span></div>
+      <div class="kpi cancel"><span class="kpi-label">Cancelled</span><span class="kpi-value" id="k-cancelled">–</span></div>
+      <div class="kpi"><span class="kpi-label">Block rate</span><span class="kpi-value" id="k-rate">–</span></div>
+      <div class="kpi"><span class="kpi-label">Your decision time</span><span class="kpi-value" id="k-wait">–</span><span class="kpi-sub" id="k-wait-sub"></span></div>
+    </section>
+
+    <section class="grid-2">
+      <article class="card">
+        <header class="card-head">
+          <h2>Calls over time</h2>
+          <div class="legend">
+            <span class="dot allow"></span>Allowed
+            <span class="dot block"></span>Blocked
+            <span class="dot cancel"></span>Cancelled
+          </div>
+        </header>
+        <div class="chart" id="timeline"></div>
+      </article>
+      <article class="card">
+        <header class="card-head"><h2>Top tools</h2></header>
+        <div id="tools" class="bars"></div>
+      </article>
+    </section>
+
+    <section class="grid-3">
+      <article class="card">
+        <header class="card-head"><h2>By interception path</h2></header>
+        <div id="paths" class="bars"></div>
+      </article>
+      <article class="card">
+        <header class="card-head"><h2>Decided by</h2></header>
+        <div id="deciders" class="bars"></div>
+      </article>
+      <article class="card">
+        <header class="card-head"><h2>Coverage</h2></header>
+        <dl class="facts" id="coverage"></dl>
+      </article>
+    </section>
+
+    <article class="card">
+      <header class="card-head">
+        <h2>Live feed <span class="live-dot" id="live-dot" title="Live updates"></span></h2>
+        <div class="filters">
+          <select id="f-decision" aria-label="Decision">
+            <option value="">All decisions</option>
+            <option value="allow">Allowed</option>
+            <option value="block">Blocked</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+          <select id="f-path" aria-label="Path">
+            <option value="">All paths</option>
+            <option value="local">Desktop · local</option>
+            <option value="remote">Desktop · mcp-remote</option>
+            <option value="web">claude.ai · gateway</option>
+          </select>
+          <select id="f-server" aria-label="Server"><option value="">All servers</option></select>
+          <input id="f-q" type="search" placeholder="Search tool, server, arguments…" aria-label="Search">
+        </div>
+      </header>
+      <div class="table-wrap">
+        <table class="feed">
+          <thead>
+            <tr><th>Time</th><th>Decision</th><th>Server / tool</th><th>Path</th><th>By</th><th class="num">Wait</th><th>Arguments</th></tr>
+          </thead>
+          <tbody id="feed"></tbody>
+        </table>
+        <p class="empty" id="feed-empty" hidden>No intercepted calls in this window yet.</p>
+      </div>
+      <p class="muted small" id="feed-count"></p>
+    </article>
+
+    <section class="grid-2">
+      <article class="card">
+        <header class="card-head"><h2>Web gateway (claude.ai)</h2></header>
+        <dl class="facts" id="gateway"></dl>
+      </article>
+      <article class="card">
+        <header class="card-head"><h2>Policy &amp; rules</h2></header>
+        <dl class="facts" id="policy"></dl>
+        <div class="table-wrap" id="rules-wrap">
+          <table class="rules"><thead><tr><th>#</th><th>Action</th><th>Server</th><th>Tool</th><th>Note</th></tr></thead><tbody id="rules"></tbody></table>
+        </div>
+        <p class="muted small" id="rules-empty" hidden>No rules: every call asks you.</p>
+      </article>
+    </section>
+  </main>
+
+  <footer class="muted small">Read-only view of <code id="audit-path">audit.jsonl</code>. Served on localhost only.</footer>
+</body>
+</html>

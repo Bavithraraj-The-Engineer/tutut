@@ -35,6 +35,10 @@ class GuardianConfig:
     # If True, block requests when the GUI cannot be shown.
     block_when_headless: bool = True
 
+    # Route every process's approvals through one broker (one window, one
+    # global queue). Linux/macOS; falls back to per-process popups.
+    popup_broker: bool = True
+
     # Timeout in seconds for user to respond to a popup (0 = no timeout).
     popup_timeout: int = 0
 
@@ -112,6 +116,7 @@ class GuardianConfig:
         return cls(
             rules=rules,
             block_when_headless=data.get("block_when_headless", True),
+            popup_broker=bool(data.get("popup_broker", True)),
             popup_timeout=data.get("popup_timeout", 0),
             http_proxy_host=data.get("http_proxy_host", "127.0.0.1"),
             http_proxy_port=data.get("http_proxy_port", 8019),
@@ -139,6 +144,7 @@ class GuardianConfig:
                 for r in self.rules
             ],
             "block_when_headless": self.block_when_headless,
+            "popup_broker": self.popup_broker,
             "popup_timeout": self.popup_timeout,
             "http_proxy_host": self.http_proxy_host,
             "http_proxy_port": self.http_proxy_port,

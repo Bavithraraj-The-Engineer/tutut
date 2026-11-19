@@ -8,6 +8,7 @@ Provides subcommands for:
   - add-remote:    Add a remote MCP server to Claude Desktop via mcp-remote
   - remove-remote: Remove such a server again
   - log:           Show / follow the audit log of intercepted calls
+  - broker:        One approval window/queue for all processes (auto-started)
   - setup:         Auto-configure Claude Desktop to use tutut
   - teardown:      Remove tutut from Claude Desktop config
   - config:        Show or edit configuration
@@ -210,6 +211,17 @@ def main(argv: list[str] | None = None) -> None:
         "--no-browser", action="store_true", help="Don't open a browser tab",
     )
 
+    # -- broker subcommand (started automatically) --
+    subparsers.add_parser(
+        "broker",
+        help="Run the approval broker (one window for every tutut process; started automatically)",
+        description=(
+            "Owns the approval window and one global queue for all tutut processes. "
+            "Started on demand by the first process that needs a decision; exits "
+            "when idle. Only one runs per user."
+        ),
+    )
+
     # -- log subcommand --
     log_parser = subparsers.add_parser(
         "log", help="Show the audit log of intercepted tool calls",
@@ -356,6 +368,14 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_remote(args)
     elif args.command == "log":
         _cmd_log(args, config)
+    elif args.command == "broker":
+        setup_logging(config, stderr=False)
+        from .broker import run_broker, supported
+
+        if not supported():
+            print("The approval broker needs Unix sockets (Linux/macOS).", file=sys.stderr)
+            sys.exit(1)
+        sys.exit(run_broker())
     elif args.command == "dashboard":
         _cmd_dashboard(args, config)
     elif args.command == "setup":

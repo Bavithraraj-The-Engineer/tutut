@@ -308,10 +308,25 @@ class PopupWindow:
         queue_position: int = 0,
         queue_total: int = 0,
         arm_delay_ms: int = ARM_DELAY_MS,
+        deadline: float | None = None,
+        queue_view: Callable[[], dict[str, Any]] | None = None,
+        on_block_all: Callable[[], None] | None = None,
     ) -> None:
+        """
+        `timeout` is the request's full approval window in seconds; `deadline`
+        (time.monotonic()) is when it ends - the broker counts from the
+        request's *arrival*, so a request that waited in the queue shows less
+        time. `queue_view()` returns {"total": n, "others": [...]} for the
+        "Also waiting" list; `on_block_all` adds a "Block all" action.
+        """
         self.request = request
         self.result = result
         self.timeout = float(timeout or 0)
+        self._deadline = deadline if deadline is not None else (
+            time.monotonic() + self.timeout if self.timeout > 0 else None)
+        self.queue_view = queue_view
+        self.on_block_all = on_block_all
+        self._last_queue_key: Any = None
         self.closed = False
         self.armed = False
         self.remember = False
@@ -353,8 +368,10 @@ class PopupWindow:
         root.protocol("WM_DELETE_WINDOW", lambda: self.decide(Decision.BLOCK, "user"))
         root.after(arm_delay_ms, self._arm)
         root.after(200, self._watch_external)
-        if self.timeout > 0:
+        if self._deadline is not None:
             root.after(100, self._tick)
+        if self.queue_view is not None:
+            root.after(0, self._refresh_queue)
         self._fade_in()
 
     # -- layout --
@@ -372,14 +389,17 @@ class PopupWindow:
         glyph = {"high": "!", "medium": "!", "low": "✓"}.get(self.risk.level, "?")
         _shield(icon, risk_color, C["window"], glyph, f["glyph"])
         icon.pack(side="left", anchor="n")
-        if queue_total > 1:  # packed before the expanding title column so it isn't squeezed
-            Badge(head, text=f"{queue_position} of {queue_total}", color=C["accent"],
-                  bg=C["window"], font=f["badge"]).pack(side="right", anchor="n", pady=(8, 0))
+        # packed before the expanding title column so it isn't squeezed
+        self._badge_slot = tk.Frame(head, bg=C["window"])
+        self._badge_slot.pack(side="right", anchor="n", pady=(8, 0))
+        self._render_badge(queue_position, queue_total)
         titles = tk.Frame(head, bg=C["window"])
         titles.pack(side="left", fill="x", expand=True, padx=(14, 0))
         tk.Label(titles, text="Approve tool call?", font=f["title"], fg=C["text"], bg=C["window"],
                  anchor="w").pack(fill="x")
-        tk.Label(titles, text=f"via {req.source}" if req.source else "Claude wants to run a tool",
+        client = getattr(req, "client", "")
+        via = (f"via {req.source}" if req.source else "Claude wants to run a tool") + (f" · {client}" if client else "")
+        tk.Label(titles, text=via,
                  font=f["small"], fg=C["muted"], bg=C["window"], anchor="w", justify="left",
                  wraplength=inner - 130).pack(fill="x", pady=(2, 0))
 
@@ -455,17 +475,21 @@ class PopupWindow:
         self.remember_label.bind("<Button-1>", lambda e: self.toggle.toggle())
 
         # countdown
-        if self.timeout > 0:
+        if self._deadline is not None:
             cd = tk.Frame(root, bg=C["window"])
             cd.pack(fill="x", padx=PAD, pady=(14, 0))
             self.countdown_label = tk.Label(cd, text="", font=f["small"], fg=C["muted"], bg=C["window"], anchor="w")
             self.countdown_label.pack(fill="x")
             self.countdown = CountdownBar(cd, width=inner, bg=C["window"])
             self.countdown.pack(anchor="w", pady=(6, 0))
-            self._render_countdown(self.timeout)
+            self._render_countdown(self._remaining())
+
+        # other requests waiting in the broker's queue (filled by _refresh_queue)
+        self._waiting = tk.Frame(root, bg=C["window"])
 
         # footer band
-        tk.Frame(root, bg=C["border"], height=1).pack(fill="x", pady=(20, 0))
+        self._footer_rule = tk.Frame(root, bg=C["border"], height=1)
+        self._footer_rule.pack(fill="x", pady=(20, 0))
         foot = tk.Frame(root, bg=C["inset"])
         foot.pack(fill="x")
         row = tk.Frame(foot, bg=C["inset"])
@@ -481,6 +505,9 @@ class PopupWindow:
         self.allow_btn.set_enabled(False)  # armed after a short delay
         self.hint = tk.Label(row, text="Esc blocks", font=f["small"], fg=C["subtle"], bg=C["inset"], anchor="w")
         self.hint.pack(side="left", padx=(4, 0))
+        self._block_all = tk.Label(row, text="", font=f["badge"], fg=C["block"], bg=C["inset"],
+                                   cursor="hand2", anchor="w")
+        self._block_all.bind("<Button-1>", lambda e: self._do_block_all())
 
         for panel in panels:
             panel.finalize()
@@ -544,15 +571,93 @@ class PopupWindow:
         self.countdown_label.configure(
             text=f"Auto-blocks in {secs} s", fg=C["muted"] if remaining > 10 else color)
 
+    def _remaining(self) -> float:
+        return (self._deadline - time.monotonic()) if self._deadline is not None else 0.0
+
     def _tick(self) -> None:
         if self.closed:
             return
-        remaining = self.timeout - (time.monotonic() - self.started)
+        remaining = self._remaining()
         if remaining <= 0:
             self.decide(Decision.BLOCK, "timeout")
             return
         self._render_countdown(remaining)
         self.root.after(100, self._tick)
+
+    # -- the broker's queue --
+
+    def _render_badge(self, position: int, total: int) -> None:
+        for child in self._badge_slot.winfo_children():
+            child.destroy()
+        if total > 1:
+            Badge(self._badge_slot, text=f"{position} of {total}", color=C["accent"],
+                  bg=C["window"], font=self.f["badge"]).pack()
+
+    def _refresh_queue(self) -> None:
+        if self.closed or self.queue_view is None:
+            return
+        try:
+            snap = self.queue_view()
+        except Exception:
+            snap = {"total": 1, "others": []}
+        others = list(snap.get("others") or [])
+        key = (snap.get("total", 1), len(others), tuple(
+            (o.get("id"), None if o.get("remaining") is None else int(o["remaining"])) for o in others[:4]))
+        if key != self._last_queue_key:
+            self._last_queue_key = key
+            self._render_badge(1, int(snap.get("total", 1)))
+            self._render_waiting(others)
+            if others and self.on_block_all is not None:
+                self._block_all.configure(text=f"Block all ({len(others) + 1})")
+                self._block_all.pack(side="left", padx=(14, 0))
+            else:
+                self._block_all.pack_forget()
+            self._fit_height()
+        self.root.after(500, self._refresh_queue)
+
+    def _render_waiting(self, others: list[dict[str, Any]]) -> None:
+        box = self._waiting
+        for child in box.winfo_children():
+            child.destroy()
+        if not others:
+            box.pack_forget()
+            return
+        f = self.f
+        if not box.winfo_ismapped():
+            box.pack(fill="x", padx=PAD, pady=(16, 0), before=self._footer_rule)
+        tk.Label(box, text=f"Also waiting ({len(others)})", font=f["bold"], fg=C["text"],
+                 bg=C["window"], anchor="w").pack(fill="x", pady=(0, 6))
+        for o in others[:4]:
+            row = tk.Frame(box, bg=C["window"])
+            row.pack(fill="x", pady=2)
+            dot = tk.Canvas(row, width=8, height=8, bg=C["window"], highlightthickness=0, bd=0)
+            dot.create_oval(0, 0, 8, 8, fill=C.get(o.get("risk") or "unknown", C["unknown"]), outline="")
+            dot.pack(side="left", padx=(0, 8))
+            rem = o.get("remaining")
+            if rem is not None:
+                color = C["muted"] if rem > 10 else C["medium"] if rem > 5 else C["high"]
+                tk.Label(row, text=f"{max(0, int(rem + 0.999))} s", font=f["small"], fg=color,
+                         bg=C["window"]).pack(side="right")
+            label = f"{o.get('tool')} on {o.get('server')}"
+            if o.get("client"):
+                label += f"  ·  {o['client']}"
+            tk.Label(row, text=label, font=f["small"], fg=C["muted"], bg=C["window"], anchor="w").pack(
+                side="left", fill="x")
+        if len(others) > 4:
+            tk.Label(box, text=f"+ {len(others) - 4} more", font=f["small"], fg=C["subtle"],
+                     bg=C["window"], anchor="w").pack(fill="x", pady=(2, 0))
+
+    def _fit_height(self) -> None:
+        root = self.root
+        root.update_idletasks()
+        try:
+            root.geometry(f"{WIDTH}x{root.winfo_reqheight()}+{root.winfo_x()}+{root.winfo_y()}")
+        except tk.TclError:
+            pass
+
+    def _do_block_all(self) -> None:
+        if self.on_block_all is not None and not self.closed:
+            self.on_block_all()  # decides this request too; _watch_external closes the window
 
     def _watch_external(self) -> None:
         # Decided elsewhere (e.g. Claude cancelled the request): close.

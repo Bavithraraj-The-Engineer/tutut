@@ -18,7 +18,7 @@ Path 3  claude.ai / Desktop / mobile ──▶ Anthropic cloud ──HTTPS──
 
 - **Three interception paths** — local Desktop servers, remote servers used from Desktop, and claude.ai connectors (via a public gateway)
 - **Hold-until-decided** — the call is not forwarded until you answer; other traffic keeps flowing meanwhile
-- **Concurrent requests** — each call is decided independently; popups queue (one at a time, "2/3 pending")
+- **One approval inbox for every session** — requests from all Claude Desktop servers, chats and the claude.ai gateway go to a single window with one global queue ("1 of 3", an "Also waiting" list with each request's own countdown, "Block all"); each call is decided independently, so nothing else waits
 - **Modern approval popup** — always on top: where the call came from, server, tool, a **risk badge** (Destructive / Modifies data / Read-only, from the server's MCP tool annotations and the tool name), syntax-highlighted arguments, a "remember my choice" switch and an auto-block countdown
 - **Safe by default** — Block has keyboard focus (a stray Enter blocks), Allow is armed only after a short delay so keystrokes already in flight can't approve; `Y` = Allow, `N` / `Esc` = Block
 - **Fail closed** — no display, a full queue, a timeout or an internal error all mean *block*
@@ -288,6 +288,7 @@ In a chat: *"List my notes"* → popup → **Allow**; *"Delete the note called s
 | `audit_file` | `~/.config/tutut/audit.jsonl` | Previous (JSON-lines) audit file — imported into `audit_db` automatically, then renamed `.migrated` |
 | `log_file` / `log_level` | `~/.config/tutut/tutut.log` / `INFO` | Diagnostic log |
 | `log_payloads` | `false` | Log full JSON-RPC payloads (may contain sensitive data) |
+| `popup_broker` | `true` | One approval window and queue for all tutut processes (Linux/macOS); `false` = each process shows its own popups |
 | `http_proxy_host` / `http_proxy_port` | `127.0.0.1` / `8019` | Gateway bind address |
 | `autowrap_exclude` | `[]` | Desktop servers the watcher must not wrap |
 | `web_secret` | (generated) | Passphrase for `tutut web --path-secret` |
@@ -379,6 +380,7 @@ tutut [--version] [--config PATH] COMMAND
   web            Gateway + Cloudflare tunnel for claude.ai             (Path 3)
   http           Local HTTP proxy only (no tunnel, no allowlist)
   log            Show / follow the audit log
+  broker         The approval inbox for all processes (started automatically)
   dashboard      Local live web dashboard (read-only)
   install        One-time setup: watcher + autostart + wrap all Desktop servers (Linux)
   uninstall      Stop the watcher, remove autostart, restore original entries
@@ -489,7 +491,9 @@ tutut really intercepts MCP traffic — wherever it sits on the connection, ever
 
 24. **Tested on Linux only** (Ubuntu 24.04 with the Claude Desktop Linux build); macOS and Windows should work but are untested.
 25. **The background watcher is Linux-only** (XDG autostart). On macOS/Windows, run `tutut watch` from a login item or use `tutut setup`.
-26. **One popup at a time** (max 10 queued; more are auto-blocked), and the Tk popup is not screen-reader friendly.
+26. **One request on screen at a time.** Others wait in the inbox's "Also waiting" list with their own countdowns; the Tk window is not screen-reader friendly.
+27. **The shared inbox needs Unix sockets** (Linux/macOS). On Windows each tutut process falls back to its own popups, which can stack when several sessions ask at once.
+28. **"Which chat asked" is approximate.** MCP doesn't tell a server which conversation made a call; the inbox shows the client name from the MCP handshake (Desktop) or the MCP session id (claude.ai) instead.
 
 ---
 
@@ -500,7 +504,7 @@ pip install -e ".[http]" pytest
 python -m pytest tests/ -v
 ```
 
-**189 tests** (6 of them open real windows and run only with `TUTUT_GUI_TESTS=1`, e.g. `TUTUT_GUI_TESTS=1 xvfb-run -a python -m pytest tests/test_popup.py`). Besides unit tests, several run real processes and servers:
+**204 tests** (7 of them open real windows and run only with `TUTUT_GUI_TESTS=1`, e.g. `TUTUT_GUI_TESTS=1 xvfb-run -a python -m pytest tests/test_popup.py`). Besides unit tests, several run real processes and servers:
 
 | Test | What it proves |
 |------|----------------|
@@ -513,6 +517,7 @@ python -m pytest tests/ -v
 | `test_gateway_ip_allowlist` / `test_client_ip_trusts_header_only_from_loopback` | 403 for non-Anthropic callers; header spoofing ignored |
 | `test_gateway_header_handling`, `…buffers_sse…`, `…rewrites_oauth_discovery` | header hygiene, SSE→JSON for tunnels, OAuth metadata rewriting |
 | `TestRemote` | `add-remote` entries, Node ≥ 18 detection, URL validation |
+| `test_broker.py` | approval broker: one global queue in arrival order across processes, decisions routed to the right process, cancel/disconnect withdraw silently, deadlines from arrival (queued requests expire on time), "remember" answers identical waiting requests, Block all, fail-closed UI errors; over a real socket: two clients never get two windows, fallback when the broker is missing or dies mid-request; singleton lock; rules saved by another process apply without restart |
 | `test_store.py` | SQLite store: WAL + owner-only files, every field round-trips, SQL-injection strings stay data, 4 processes writing 1 000 records concurrently, JSONL import (no duplicates, no stranded records, 4 processes opening at once), retention, 100k-record query timings, log rotation |
 | `test_popup.py` | risk classification (incl. a server lying about a delete tool), JSON highlighting, annotations learned by both proxies; window behaviour under Xvfb: Allow ignored until armed, Enter/Esc block, remember switch, countdown timeout, cancellation closes the window |
 | `test_dashboard.py` | token → cookie login, DNS-rebinding refusal, CSP, stats and filters, coverage status, live SSE push of a newly appended record |
@@ -541,6 +546,27 @@ The reason text distinguishes user, rule, timeout, headless and queue-full decis
 ### Concurrency and cancellation (stdio)
 
 stdin is read on a thread (portable, including Windows) into an asyncio stream. Each `tools/call` gets its own task; the reader never waits for a popup. If Claude sends `notifications/cancelled` for a pending call, its task is cancelled, the popup closes, the audit log records `cancelled`, and no response is sent (as the spec requires). If the server exits, every request still waiting on it gets an error response and tutut exits so the client sees the disconnect. When the client closes stdin, in-flight decisions get 2 s to finish, then the server's stdin is closed and it gets 5 s to answer and exit.
+
+### Concurrent requests from different sessions: the approval broker
+
+Every wrapped Claude Desktop server runs its own `tutut stdio` process, and the claude.ai gateway is another — so two chats (or Desktop and claude.ai) can ask at the same moment from different processes. Instead of each process opening its own window (stacked on top of each other, with countdowns running on the hidden ones), they all hand their requests to one **approval broker**:
+
+```
+tutut stdio (filesystem) ─┐
+tutut stdio (demo-notes) ─┼─ Unix socket (~/.config/tutut/broker.sock, 0600) ─▶ broker ─▶ ONE window
+tutut web   (gateway)    ─┘                                                       │  "1 of 3" + "Also waiting"
+                                                                                  └─ decision back to the right process
+```
+
+- **One window, one global queue** in arrival order; the header shows "1 of N", an "Also waiting" list shows every other request with its server, tool, risk and session, and **Block all** clears the queue.
+- **Deadlines count from arrival.** A request waiting behind another still auto-blocks on time (and Claude gets a proper "blocked" answer), instead of its countdown only starting when it reaches the front.
+- **Each request is armed separately** (0.7 s), so a quick double "Y" can't approve the next request by accident.
+- **"Remember my choice"** also answers identical (server, tool) requests already waiting, and every tutut process reloads rules when the config file changes — a remembered choice applies across sessions immediately.
+- **Who asked:** the client name from the MCP `initialize` handshake (e.g. `local-agent-mode-demo-notes`) or the claude.ai MCP session id, shown in the window and stored in the audit log.
+- **Started on demand** by the first process that needs a decision (its own session, no inherited stdio), kept to one per user by a lock file, and exits after 10 idle minutes. Submitting happens off the proxy's event loop, so starting the broker never stalls MCP traffic.
+- **Never loses a decision:** if the broker can't be reached — or dies mid-request — pending requests fall back to the process's own popup. On Windows (no Unix sockets) the per-process popups are used.
+
+Verified end to end with two real `tutut stdio` processes receiving tool calls at the same moment: one broker, one window showing both requests ("1 of 2", the other under "Also waiting"), both answered, the audit log recording which session asked.
 
 ### The popup
 
@@ -576,6 +602,7 @@ tutut/
 │   ├── remote.py         # Path 2: add-remote / remove-remote (mcp-remote entries)
 │   ├── http_proxy.py     # Path 3: HTTP gateway (Streamable HTTP, allowlist, SSE)
 │   ├── web_gateway.py    # Path 3: `tutut web` (gateway + Cloudflare quick tunnel)
+│   ├── broker.py         # approval broker: one inbox/queue for every tutut process
 │   ├── gui.py            # PopupManager queue, PopupResult (thread-safe layer)
 │   ├── popup_ui.py       # the approval window (tkinter)
 │   ├── risk.py           # risk hints from annotations + tool names; JSON tokens
@@ -590,7 +617,7 @@ tutut/
 │   ├── service.py        # install / uninstall / status / watch
 │   └── setup_helper.py   # setup / teardown
 ├── examples/demo_server.py   # Demo remote MCP server (notes)
-├── tests/                    # 189 tests (unit + real-process end-to-end + GUI)
+├── tests/                    # 204 tests (unit + real-process end-to-end + GUI)
 ├── install.sh                # One-command Linux installer
 ├── ARCHITECTURE.md
 └── README.md

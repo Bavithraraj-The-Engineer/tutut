@@ -89,11 +89,11 @@ Gateway details:
 ## 5. The shared decision engine
 
 ```
-tools/call ─▶ Interceptor.decide(msg)
+tools/call ─▶ Interceptor.decide(msg)    (rules reloaded when config.json changes)
               ├─ rules (first glob match on server+tool) ── ALLOW/BLOCK ─▶ decided_by="rule"
               ├─ no display ─▶ block (block_when_headless) ─▶ "headless"
-              └─ PopupManager.request_decision()
-                    queue (max 10; overflow → block "queue_full")
+              └─ approval broker (one inbox for every tutut process; local PopupManager as fallback)
+                    queue (broker: max 50 pending across all processes; local fallback: 10; overflow → block "queue_full")
                     always-on-top window: source, tool + server, risk badge, highlighted arguments,
                     [remember] switch, countdown; Block focused, Allow armed after 0.7 s
                     ├─ Allow / Block ─▶ "user"   (Remember → rule merged into config file)
@@ -130,6 +130,7 @@ tools/call ─▶ Interceptor.decide(msg)
 | `remote.py` | Path 2: `add-remote` / `remove-remote`, Node ≥ 18 discovery |
 | `http_proxy.py` | Path 3: Streamable HTTP gateway, allowlist, SSE buffering, OAuth rewriting, request log |
 | `web_gateway.py` | Path 3: `tutut web` (gateway + quick tunnel, health check, secret handling) |
+| `broker.py` | Approval broker: one window and global queue for all tutut processes over an owner-only Unix socket; deadlines from arrival, Block all, remember-applies-to-waiting, auto-start + singleton lock, fallback to local popups |
 | `gui.py` | `PopupManager` queue and `PopupResult` (thread-safe layer) |
 | `popup_ui.py` | The approval window: rounded canvas components, risk badge, highlighted JSON, arming delay, countdown |
 | `risk.py` | Risk level from MCP tool annotations (learned from `tools/list`) and tool names, combined pessimistically |

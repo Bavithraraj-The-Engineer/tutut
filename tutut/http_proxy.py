@@ -424,9 +424,16 @@ class HttpProxy:
         """Run the shared decision engine; errors fail closed."""
         extra = None
         if request is not None:
+            extra = {}
             ua = request.headers.get("User-Agent")
             if ua:
-                extra = {"user_agent": ua[:200]}
+                extra["user_agent"] = ua[:200]
+            session = request.headers.get("Mcp-Session-Id")
+            if session:
+                # MCP doesn't name the chat; the session id at least groups
+                # requests from the same connection in the approval window.
+                extra["client"] = f"session {session[:8]}"
+            extra = extra or None
         try:
             return await self._interceptor.decide(msg, extra=extra)
         except asyncio.CancelledError:

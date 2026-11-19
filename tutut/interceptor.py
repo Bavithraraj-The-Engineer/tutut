@@ -72,6 +72,14 @@ class Interceptor:
         )
         # tool name -> MCP annotations, learned from tools/list responses
         self.tool_annotations: dict[str, dict[str, Any]] = {}
+        # MCP clientInfo name from initialize (which client/session is asking)
+        self.client_label = ""
+        self._rules_mtime: int | None = None
+        if config.source_path is not None:
+            try:
+                self._rules_mtime = config.source_path.stat().st_mtime_ns
+            except OSError:
+                pass
 
     def learn_tools(self, result: Any) -> None:
         """Remember each tool's annotations from a tools/list result."""
@@ -99,11 +107,46 @@ class Interceptor:
 
     @property
     def popup_manager(self) -> Any:
+        """
+        The shared approval broker (one window and one queue for every tutut
+        process), falling back to this process's own popups when the broker
+        is disabled, unsupported or unreachable.
+        """
         if self._popup_mgr is None:
             from .gui import PopupManager
 
-            self._popup_mgr = PopupManager(timeout=self._config.popup_timeout)
+            local = PopupManager(timeout=self._config.popup_timeout)
+            from . import broker
+
+            if self._config.popup_broker and broker.supported():
+                self._popup_mgr = broker.BrokerClient(
+                    timeout=self._config.popup_timeout,
+                    fallback=local,
+                    config_path=self._config.source_path,
+                )
+            else:
+                self._popup_mgr = local
         return self._popup_mgr
+
+    def _maybe_reload_rules(self) -> None:
+        """Pick up rules saved by other tutut processes ("remember" choices, CLI)."""
+        path = self._config.source_path
+        if path is None:
+            return
+        try:
+            mtime = path.stat().st_mtime_ns
+        except OSError:
+            return
+        if mtime == self._rules_mtime:
+            return
+        self._rules_mtime = mtime
+        try:
+            fresh = GuardianConfig.load(path)
+        except Exception:
+            return
+        self._config.rules = list(fresh.rules)
+        self._rules.reload(self._config)
+        logger.info("Reloaded %d rule(s) from %s", len(fresh.rules), path)
 
     @property
     def rules(self) -> RulesEngine:
@@ -122,13 +165,15 @@ class Interceptor:
         arguments = msg.tool_arguments or {}
         start = time.monotonic()
         extra = {**(extra or {}), "risk": classify(tool, self.tool_annotations.get(tool)).level}
+        if not extra.get("client") and self.client_label:
+            extra["client"] = self.client_label  # which client/session asked
         logger.info(
             "Intercepted tool call: transport=%s server=%s tool=%s",
             self.transport, self.server_name, tool,
         )
 
         try:
-            verdict = await self._decide(msg, tool, arguments)
+            verdict = await self._decide(msg, tool, arguments, extra)
         except asyncio.CancelledError:
             self._record(msg, tool, arguments, "cancelled", "client", start, extra)
             logger.info("Tool call cancelled by the client while pending: %s", tool)
@@ -147,7 +192,9 @@ class Interceptor:
         )
         return verdict
 
-    async def _decide(self, msg: JsonRpcMessage, tool: str, arguments: dict[str, Any]) -> Verdict:
+    async def _decide(self, msg: JsonRpcMessage, tool: str, arguments: dict[str, Any],
+                      extra: dict[str, Any] | None = None) -> Verdict:
+        self._maybe_reload_rules()
         action = self._rules.evaluate(self.server_name, tool)
         if action == RuleAction.ALLOW:
             return Verdict(True, "rule")
@@ -161,9 +208,10 @@ class Interceptor:
             )
             return Verdict(allowed, "headless")
 
-        return await self._ask_user(msg, tool, arguments)
+        return await self._ask_user(msg, tool, arguments, extra)
 
-    async def _ask_user(self, msg: JsonRpcMessage, tool: str, arguments: dict[str, Any]) -> Verdict:
+    async def _ask_user(self, msg: JsonRpcMessage, tool: str, arguments: dict[str, Any],
+                        extra: dict[str, Any] | None = None) -> Verdict:
         request = InterceptedRequest(
             id=str(uuid.uuid4()),
             message=msg,
@@ -172,11 +220,21 @@ class Interceptor:
             arguments=arguments,
             source=self.source,
             annotations=self.tool_annotations.get(tool),
+            client=str((extra or {}).get("client") or self.client_label),
         )
-        result = self.popup_manager.request_decision(request)
+        # Submit off the event loop: the first request may start the approval
+        # broker (up to a few seconds) and the proxy must keep relaying traffic.
+        loop = asyncio.get_running_loop()
+        manager = self.popup_manager
+        submitted = loop.run_in_executor(None, manager.request_decision, request)
+        try:
+            result = await asyncio.shield(submitted)
+        except asyncio.CancelledError:
+            # Cancelled while submitting: withdraw it once the submission lands.
+            submitted.add_done_callback(lambda _f: manager.cancel(request.id))
+            raise
 
         # Bridge the popup thread to asyncio without parking a thread per call.
-        loop = asyncio.get_running_loop()
         done = loop.create_future()
 
         def _wake(_result: Any) -> None:
@@ -189,7 +247,7 @@ class Interceptor:
         try:
             await done
         except asyncio.CancelledError:
-            self.popup_manager.cancel(request.id)
+            manager.cancel(request.id)
             raise
 
         allowed = result.decision == Decision.ALLOW

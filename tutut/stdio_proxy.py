@@ -331,6 +331,12 @@ class StdioProxy:
                     self._on_client_cancel(msg)
                 elif msg.method == "tools/list" and msg.id is not None:
                     self._tools_list_ids.add(_id_key(msg.id))
+                elif msg.method == "initialize":
+                    info = (msg.params or {}).get("clientInfo") or {}
+                    if isinstance(info, dict) and info.get("name"):
+                        # e.g. "claude-ai" or "local-agent-mode-demo-notes": shown
+                        # in the popup so concurrent sessions can be told apart
+                        self._interceptor.client_label = str(info["name"])[:60]
 
                 await self._write_server(line)
                 if self._config.log_payloads:

@@ -112,6 +112,9 @@ class InterceptedRequest:
     # MCP tool annotations the server declared in tools/list (readOnlyHint,
     # destructiveHint, ...), if seen. Hints only - the server may be wrong.
     annotations: dict[str, Any] | None = None
+    # Which client/session asked: the MCP clientInfo name from initialize, or
+    # a short session id on the HTTP gateway (MCP doesn't name the chat).
+    client: str = ""
 
     def make_blocked_response(self, reason: str = "user") -> dict[str, Any]:
         """Create the response sent back to the client for a blocked request."""

@@ -254,3 +254,31 @@ def test_window_close_blocks():
     w.root.update()
     w.root.tk.call(w.root.protocol("WM_DELETE_WINDOW"))
     assert res.decision == Decision.BLOCK and w.closed
+
+
+@gui
+def test_inbox_lists_other_requests_and_blocks_all():
+    import tkinter as tk
+
+    from tutut.gui import PopupResult
+    from tutut.popup_ui import PopupWindow, sample_request
+
+    others = [{"id": "b", "server": "fs", "tool": "write_file", "client": "session-B",
+               "risk": "medium", "remaining": 30.0}]
+    blocked = []
+    res = PopupResult()
+
+    def block_all():
+        blocked.append(True)
+        res.set(Decision.BLOCK, reason="user")
+
+    w = PopupWindow(sample_request(0), res, timeout=45, deadline=time.monotonic() + 20,
+                    queue_view=lambda: {"total": 2, "others": others}, on_block_all=block_all)
+    _pump(w, 0.3)
+    texts = [c.cget("text") for c in w._waiting.winfo_children() if isinstance(c, tk.Label)]
+    assert "Also waiting (1)" in texts and w._waiting.winfo_ismapped()
+    assert w._block_all.cget("text") == "Block all (2)"
+    assert 18.5 <= w._remaining() <= 20.0          # counts from the request's arrival
+    w._block_all.event_generate("<Button-1>")
+    _pump(w, 0.5)
+    assert blocked and w.closed and res.decision == Decision.BLOCK

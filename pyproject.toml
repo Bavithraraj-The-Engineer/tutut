@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tutut"
+version = "1.0.0"
+description = "tutut — Monitor and control MCP (Model Context Protocol) tool calls with user confirmation"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+keywords = ["mcp", "model-context-protocol", "security", "proxy", "claude"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: X11 Applications",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: System :: Monitoring",
+]
+
+# No required dependencies beyond the standard library for stdio mode.
+# tkinter is part of the standard library on most Python installations.
+dependencies = []
+
+[project.optional-dependencies]
+http = ["aiohttp>=3.9"]
+all = ["aiohttp>=3.9"]
+
+[project.scripts]
+tutut = "tutut.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Bavithraraj-The-Engineer/tutut"
+
+[tool.setuptools.packages.find]
+include = ["tutut*"]
+
+[tool.setuptools.package-data]
+# Dashboard page (served by `tutut dashboard`)
+tutut = ["dashboard_static/*"]
